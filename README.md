@@ -91,7 +91,7 @@ build.cmd
 
 ```powershell
 Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force
-& "$env:TEMP\dotnet-install.ps1" -Channel 8.0 -InstallDir "C:\Users\31936\Desktop\music player\.dotnet" -NoPath
+& "$env:TEMP\dotnet-install.ps1" -Channel 8.0 -InstallDir "<项目根目录>\.dotnet" -NoPath
 ```
 
 ## 已知限制
