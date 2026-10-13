@@ -57,6 +57,7 @@ internal static class Cli
                 "list" or "ls" or "devices" => ListDevices(),
                 "doctor" or "check" => Doctor(),
                 "probe" or "selftest" => Probe(args[1..]),
+                "mic" or "mike" or "microphone" => MicCheck(args[1..]),
                 "route" or "run" => Route(args[1..]),
                 "help" or "-h" or "--help" => PrintHelp(),
                 _ => UnknownCommand(args[0]),
@@ -109,6 +110,7 @@ internal static class Cli
         Console.WriteLine("  vscard list                              列出全部音频端点，并检测虚拟线缆");
         Console.WriteLine("  vscard doctor                            环境自检");
         Console.WriteLine("  vscard probe [选项]                      端到端自检：验证虚拟声卡两端是否连通");
+        Console.WriteLine("  vscard mic [选项]                        检测麦克风输入电平（混音前先确认麦克风有信号）");
         Console.WriteLine("  vscard route [选项]                      把音频路由到虚拟声卡");
         Console.WriteLine();
         Console.WriteLine("probe 选项：");
@@ -119,18 +121,23 @@ internal static class Cli
         Console.WriteLine("  --file, -f <路径>     用音频文件代替测试音");
         Console.WriteLine();
         Console.WriteLine("route 选项：");
-        Console.WriteLine("  --to <名称片段>     目标渲染端点，默认自动选用系统中的虚拟音频设备");
-        Console.WriteLine("  --file, -f <路径>   音频文件，可重复指定");
-        Console.WriteLine("  --loopback, -l      混入系统正在播放的声音");
-        Console.WriteLine("  --tone              混入 440Hz 测试音");
-        Console.WriteLine("  --volume, -v <0-1>  音量，默认 1.0");
-        Console.WriteLine("  --latency <毫秒>    输出缓冲，默认 80");
-        Console.WriteLine("  --seconds <秒>      运行指定时长后自动退出（便于验证）");
+        Console.WriteLine("  --to <名称片段>        目标渲染端点，默认自动选用系统中的虚拟音频设备");
+        Console.WriteLine("  --mic, -m <名称片段>   混入一个录音端点（通常是真实麦克风），对方就能听到你说话");
+        Console.WriteLine("  --mic-volume, --mv <0-1>");
+        Console.WriteLine("                         麦克风音量，默认 1.0（与音频文件音量分开调）");
+        Console.WriteLine("  --file, -f <路径>      音频文件，可重复指定");
+        Console.WriteLine("  --loopback, -l         混入系统正在播放的声音");
+        Console.WriteLine("  --tone                 混入 440Hz 测试音");
+        Console.WriteLine("  --volume, -v <0-1>     音频文件音量，默认 1.0");
+        Console.WriteLine("  --latency <毫秒>       输出缓冲，默认 80");
+        Console.WriteLine("  --seconds <秒>         运行指定时长后自动退出（便于验证）");
         Console.WriteLine();
         Console.WriteLine("示例：");
         Console.WriteLine("  vscard probe");
         Console.WriteLine("  vscard route --tone --seconds 5");
         Console.WriteLine("  vscard route -f \"song.mp3\"");
+        Console.WriteLine("  vscard route -m \"麦克风阵列\" -f \"song.mp3\" -v 0.7    :: 边说话边放歌");
+        Console.WriteLine("  vscard route -m \"麦克风阵列\"                          :: 只把麦克风转进线缆");
         Console.WriteLine("  vscard route -l -v 0.6 --to \"CABLE Input\"");
         return 0;
     }
@@ -234,6 +241,12 @@ internal static class Cli
         }
 
         Console.WriteLine();
+        Console.WriteLine("重要：通话软件的麦克风一旦换成线缆，你的真实声音就不会自动进去了。");
+        Console.WriteLine("      要同时说话，必须把麦克风混进来：");
+        Console.WriteLine("        vscard route --mic \"<麦克风名称>\"              :: 只转麦克风");
+        Console.WriteLine("        vscard route --mic \"<麦克风名称>\" -f \"歌.mp3\"   :: 边说话边放音频");
+        Console.WriteLine("      （名称为 vscard list 里的录音端点名，用片段即可）");
+        Console.WriteLine();
         Console.WriteLine("若上面已选对但仍无声，依次排查：");
         Console.WriteLine("  1. 隐私：设置 → 隐私和安全性 → 麦克风 → 允许桌面应用访问麦克风（微信 / QQ 等需打开）");
         Console.WriteLine("  2. 级别：声音设置 → CABLE Output → 属性 → 级别，音量拉到 100、取消静音");
@@ -247,10 +260,12 @@ internal static class Cli
     private static int Route(string[] args)
     {
         string? targetHint = null;
+        string? micHint = null;
         var files = new List<string>();
         var useLoopback = false;
         var useTone = false;
         var volume = 1.0f;
+        var micVolume = 1.0f;
         var latency = 80;
         var seconds = 0;
 
@@ -260,6 +275,14 @@ internal static class Cli
             {
                 case "--to":
                     targetHint = TakeValue(args, ref i);
+                    break;
+
+                case "--mic" or "-m":
+                    micHint = TakeValue(args, ref i);
+                    break;
+
+                case "--mic-volume" or "--mv":
+                    micVolume = float.Parse(TakeValue(args, ref i), CultureInfo.InvariantCulture);
                     break;
 
                 case "--file" or "-f":
@@ -297,7 +320,7 @@ internal static class Cli
             }
         }
 
-        if (files.Count == 0 && !useLoopback && !useTone)
+        if (files.Count == 0 && !useLoopback && !useTone && micHint is null)
         {
             useTone = true;
             Console.WriteLine("[提示] 未指定音源，改用 440Hz 测试音。");
@@ -326,6 +349,14 @@ internal static class Cli
         {
             session.Add(SourceFactory.FromSystemOutput(volume));
             Console.WriteLine("音源     : 系统输出（WASAPI 回环）");
+        }
+
+        if (micHint is not null)
+        {
+            // MMDevice 的所有权转移给 CaptureSource，由会话负责释放。
+            var microphone = SourceFactory.FromMicrophone(catalog.ResolveCaptureEndpoint(micHint), micVolume);
+            session.Add(microphone);
+            Console.WriteLine($"音源     : 麦克风 {microphone.DeviceName}  音量 {micVolume:F2}  采集 {microphone.InputFormatDescription}");
         }
 
         if (useTone)
@@ -357,6 +388,17 @@ internal static class Cli
             {
                 Console.WriteLine($"  - {name}");
             }
+        }
+
+        if (micHint is not null)
+        {
+            Console.WriteLine("已把麦克风混入线缆：对方会同时听到你的说话声与播放的音频。");
+            Console.WriteLine("  建议戴耳机 —— 否则外放的声音会被麦克风拾取，形成回声甚至啸叫。");
+        }
+        else if (captureSideName is not null)
+        {
+            Console.WriteLine("注意：当前只送了音频，没有混入麦克风，对方听不到你说话。");
+            Console.WriteLine("      若需要同时说话，加上 --mic \"<麦克风名>\" 重新运行（名字见 vscard list）。");
         }
 
         Console.WriteLine(seconds > 0 ? $"运行 {seconds} 秒后自动停止..." : "按 Ctrl+C 停止。");
@@ -541,6 +583,93 @@ internal static class Cli
         Console.WriteLine("      该设备并不把播放端的内容回环过来，因此不能当虚拟线缆用。");
         Console.WriteLine("      请改用 VB-CABLE 或 VoiceMeeter。");
         return 4;
+    }
+
+    /// <summary>
+    /// 麦克风输入检测。把麦克风混进虚拟线缆之前，先用它确认麦克风本身有信号，
+    /// 免得把"麦克风被静音 / 被隐私设置拦掉"误判成路由工具的问题。
+    /// </summary>
+    private static int MicCheck(string[] args)
+    {
+        string? deviceHint = null;
+        var seconds = 5;
+
+        for (var i = 0; i < args.Length; i++)
+        {
+            switch (args[i])
+            {
+                case "--device" or "-d" or "--to":
+                    deviceHint = TakeValue(args, ref i);
+                    break;
+
+                case "--seconds":
+                    seconds = int.Parse(TakeValue(args, ref i), CultureInfo.InvariantCulture);
+                    break;
+
+                default:
+                    throw new ArgumentException($"未知选项：{args[i]}");
+            }
+        }
+
+        using var catalog = new AudioEndpointCatalog();
+
+        deviceHint ??= catalog.GetDefaultEndpointName(DataFlow.Capture, Role.Communications)
+                       ?? catalog.GetDefaultEndpointName(DataFlow.Capture, Role.Multimedia);
+
+        if (deviceHint is null)
+        {
+            Console.Error.WriteLine("[错误] 找不到可用的录音端点。");
+            return 2;
+        }
+
+        using var device = catalog.ResolveCaptureEndpoint(deviceHint);
+        using var meter = new LevelMeter(device);
+
+        Console.WriteLine("麦克风输入检测");
+        Console.WriteLine($"  设备      : {device.FriendlyName}");
+        Console.WriteLine($"  采集格式  : {meter.FormatDescription}");
+
+        if (catalog.GetCaptureVolume(deviceHint) is { } volume)
+        {
+            Console.WriteLine($"  音量 / 静音: {volume.Volume * 100:F0}% / {(volume.Muted ? "已静音" : "未静音")}");
+        }
+
+        Console.WriteLine($"  时长      : {seconds} 秒 —— 请正常说话");
+        Console.WriteLine();
+
+        // 先丢弃唤醒瞬态，再开始计量。
+        meter.Start();
+        Thread.Sleep(SettleMilliseconds);
+        meter.Reset();
+        Thread.Sleep(Math.Max(1, seconds) * 1000);
+
+        var peak = meter.Peak;
+        var rms = meter.Rms;
+        var bytes = meter.BytesCaptured;
+        meter.Stop();
+
+        Console.WriteLine($"  结果      : 峰值 {peak:F5}  RMS {rms:F5}  {bytes} 字节");
+        Console.WriteLine();
+
+        if (bytes == 0)
+        {
+            Console.WriteLine("结论：采集端没有任何数据流 —— 设备被独占，或系统禁止了麦克风访问。");
+            return 3;
+        }
+
+        if (peak < 0.0005)
+        {
+            Console.WriteLine("结论：几乎收不到声音。若刚才你确实说话了，依次检查：");
+            Console.WriteLine("  1. 音量：声音设置 → 该麦克风 → 属性 → 级别，把音量拉满（很多机器默认偏低）");
+            Console.WriteLine("  2. 隐私：设置 → 隐私和安全性 → 麦克风 → 允许桌面应用访问麦克风");
+            Console.WriteLine("  3. 硬件：麦克风物理静音开关、耳机麦克风是否插好");
+            Console.WriteLine("  4. 独占：属性 → 高级 → 取消「允许应用程序独占控制该设备」");
+            Console.WriteLine("若只是没说话，重跑一次并对着麦克风正常说话即可。");
+            return 4;
+        }
+
+        Console.WriteLine("结论：麦克风有输入信号，可以混入虚拟线缆（route --mic \"<麦克风名>\"）。");
+        return 0;
     }
 
     private static string? GuessVirtualCapture(AudioEndpointCatalog catalog)

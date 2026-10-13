@@ -67,16 +67,50 @@ vscard.cmd doctor                 :: 查看默认输入设备是否已指向线�
 
 > 若通话软件开启回声消除、同时本地也在外放同一路音频，AEC 会把送出的音乐消掉。改用耳机，或让本地播放在另一块设备上。
 
+## 换成 CABLE Output 后，对方听不到我说话了
+
+这是**预期行为**，不是故障。虚拟线缆里只有你主动送进去的音频，你的真实麦克风并不会自动流进去。
+
+解决办法：把麦克风和音频**混成一路**再送进线缆。
+
+```cmd
+:: 先确认麦克风本身有信号（对着麦克风正常说话）
+vscard.cmd mic
+
+:: 边说话边放音频 —— 对方两样都能听到
+vscard.cmd route --mic "麦克风阵列" -f "song.mp3" -v 0.7 --mic-volume 1.0
+
+:: 只想把麦克风转进线缆（等于"延长线"）
+vscard.cmd route --mic "麦克风阵列"
+```
+
+麦克风名字用 `vscard.cmd list` 里「录音端点」的名字，写片段即可（如 `麦克风阵列`）。
+
+`MixingSampleProvider` 会把麦克风、音频文件、系统回环叠加成一路，音量分别用 `--mic-volume` 和 `--volume` 控制。
+
+> **一定要戴耳机。** 麦克风会把外放的声音再拾进去，形成回声，音量稍大就会啸叫。这是 AEC 之外物理层面的问题，软件无法完全消除。
+
 ## 用法
 
 ```cmd
-vscard.cmd list                       :: 列出全部端点，并检测虚拟线缆
-vscard.cmd doctor                     :: 环境自检 + 通话接入自检
-vscard.cmd probe                      :: 端到端自检：验证虚拟声卡两端是否真的连通
-vscard.cmd route --tone --seconds 5   :: 送 5 秒 440Hz 测试音
-vscard.cmd route -f "song.mp3"        :: 播放文件到虚拟声卡
-vscard.cmd route -l -v 0.6            :: 把系统正在播放的声音送出去
+vscard.cmd list                          :: 列出全部端点，并检测虚拟线缆
+vscard.cmd doctor                        :: 环境自检 + 通话接入自检
+vscard.cmd probe                         :: 端到端自检：验证虚拟声卡两端是否真的连通
+vscard.cmd mic                           :: 检测麦克风输入电平
+vscard.cmd route --tone --seconds 5      :: 送 5 秒 440Hz 测试音
+vscard.cmd route -f "song.mp3"           :: 播放文件到虚拟声卡
+vscard.cmd route -m "麦克风阵列" -f "song.mp3"   :: 麦克风 + 音频一起送出去
+vscard.cmd route -l -v 0.6               :: 把系统正在播放的声音送出去
 ```
+
+`mic` 选项：
+
+| 选项 | 说明 |
+|---|---|
+| `--device, -d <名称片段>` | 要检测的录音端点，默认取系统默认输入设备 |
+| `--seconds <秒>` | 检测时长，默认 5 |
+
+退出码：`0` 有信号 / `3` 无数据流 / `4` 几乎无信号。
 
 `probe` 选项：
 
@@ -100,14 +134,18 @@ vscard.cmd route -l -v 0.6            :: 把系统正在播放的声音送出去
 | 选项 | 说明 |
 |---|---|
 | `--to <名称片段>` | 目标渲染端点，默认自动选用检测到的虚拟设备 |
+| `--mic, -m <名称片段>` | 混入一个录音端点（通常是真实麦克风），对方就能听到你说话 |
+| `--mic-volume, --mv <0-1>` | 麦克风音量，默认 1.0 |
 | `--file, -f <路径>` | 音频文件，可重复指定多首 |
 | `--loopback, -l` | 混入系统正在播放的声音（WASAPI 回环） |
 | `--tone` | 混入 440Hz 测试音 |
-| `--volume, -v <0-1>` | 音量，默认 1.0 |
+| `--volume, -v <0-1>` | 音频文件音量，默认 1.0 |
 | `--latency <毫秒>` | 输出缓冲，默认 80 |
 | `--seconds <秒>` | 运行指定时长后自动退出 |
 
-多路音源可以叠加——`--file` 和 `--loopback` 同时给，会在 `MixingSampleProvider` 里混成一路再送出去，**本地扬声器照常发声，互不影响**。
+多路音源可以叠加——`--mic`、`--file`、`--loopback` 同时给，会在 `MixingSampleProvider` 里混成一路再送出去，**本地扬声器照常发声，互不影响**。
+
+麦克风采集内部有 200ms 缓冲（`CaptureSource`），并对缓冲不足的部分补静音，避免混音输出断续。因此麦克风这一路会比纯音频多约 200ms 延迟。
 
 ## 编译
 

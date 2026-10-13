@@ -1,3 +1,4 @@
+using NAudio.CoreAudioApi;
 using NAudio.Wave;
 using NAudio.Wave.SampleProviders;
 
@@ -13,6 +14,13 @@ public static class SourceFactory
 
     public static LoopbackSource FromSystemOutput(float volume)
         => new(volume);
+
+    /// <summary>
+    /// 取一个录音端点（通常是真实麦克风）作为音源。传入的 MMDevice 归返回值所有，
+    /// 由 <see cref="CaptureSource.Dispose"/> 负责释放。
+    /// </summary>
+    public static CaptureSource FromMicrophone(MMDevice device, float volume)
+        => new(device, volume);
 
     public static ISampleProvider Tone(int sampleRate, double frequencyHz, float gain)
         => new SignalGenerator(sampleRate, 2)

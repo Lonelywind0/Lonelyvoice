@@ -13,6 +13,8 @@ public sealed class RouterSession : IDisposable
     private readonly WasapiOut _output;
     private readonly MMDevice _target;
     private readonly List<IDisposable> _owned = [];
+    private readonly List<IStartableSource> _startables = [];
+    private bool _started;
     private bool _disposed;
 
     public RouterSession(MMDevice target, int latencyMilliseconds = 80)
@@ -47,12 +49,47 @@ public sealed class RouterSession : IDisposable
             _owned.Add(disposable);
         }
 
+        if (source is IStartableSource startable)
+        {
+            _startables.Add(startable);
+        }
+
         _mixer.AddMixerInput(Normalize(source));
     }
 
-    public void Start() => _output.Play();
+    public void Start()
+    {
+        if (_started)
+        {
+            return;
+        }
 
-    public void Stop() => _output.Stop();
+        _started = true;
+
+        // 先启动采集再开始渲染，保证第一帧就有音源可用。
+        foreach (var startable in _startables)
+        {
+            startable.Start();
+        }
+
+        _output.Play();
+    }
+
+    public void Stop()
+    {
+        if (!_started)
+        {
+            return;
+        }
+
+        _started = false;
+        _output.Stop();
+
+        foreach (var startable in _startables)
+        {
+            startable.Stop();
+        }
+    }
 
     private ISampleProvider Normalize(ISampleProvider source)
     {
