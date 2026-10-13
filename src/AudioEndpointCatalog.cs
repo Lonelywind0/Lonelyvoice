@@ -132,6 +132,119 @@ public sealed class AudioEndpointCatalog : IDisposable
             .ToList();
     }
 
+    /// <summary>
+    /// 在形似虚拟线缆的渲染端点中排序，把最可能真正可用的排在最前。
+    /// 依据：① 是否存在配对录音端（说明它是一根完整的"线缆"而不是单向输出通道）；
+    /// ② 是否为成熟的虚拟线缆驱动；③ 排除多声道辅助入口（如 "CABLE In 16 Ch"，
+    /// 这类端点常被独占或打不开）；④ 已知不做回环的设备降权。
+    /// </summary>
+    public IReadOnlyList<string> RankVirtualRenderCandidates()
+    {
+        var captureNames = CaptureNames;
+
+        return DetectVirtualCables()
+            .OrderByDescending(name => ScoreVirtualRender(name, captureNames))
+            .ToList();
+    }
+
+    private static int ScoreVirtualRender(string renderName, IReadOnlyList<string> captureNames)
+    {
+        var score = 0;
+        var vendor = VendorTag(renderName);
+
+        if (vendor.Length > 0 &&
+            captureNames.Any(name => string.Equals(VendorTag(name), vendor, StringComparison.OrdinalIgnoreCase)))
+        {
+            score += 40;
+        }
+
+        if (renderName.Contains("VB-Audio", StringComparison.OrdinalIgnoreCase) ||
+            renderName.Contains("VoiceMeeter", StringComparison.OrdinalIgnoreCase) ||
+            renderName.Contains("CABLE", StringComparison.OrdinalIgnoreCase))
+        {
+            score += 20;
+        }
+
+        // 多声道辅助入口不是标准线缆端点：实测 "CABLE In 16 Ch" 会返回
+        // AUDCLNT_E_DEVICE_IN_USE(0x8889000A)，打开即失败。
+        if (renderName.Contains("16 Ch", StringComparison.OrdinalIgnoreCase) ||
+            renderName.Contains("16Ch", StringComparison.OrdinalIgnoreCase))
+        {
+            score -= 60;
+        }
+
+        // ToDesk Virtual Audio 采集时会自发输出固定电平，并不回环，实测不可用。
+        if (renderName.Contains("ToDesk", StringComparison.OrdinalIgnoreCase))
+        {
+            score -= 40;
+        }
+
+        return score;
+    }
+
+    /// <summary>
+    /// 取设备名末尾括号内的驱动标识：如 "扬声器 (VB-Audio Virtual Cable)" -> "VB-Audio Virtual Cable"。
+    /// 用它判断渲染端与录音端是否属于同一条线缆。
+    /// </summary>
+    private static string VendorTag(string friendlyName)
+    {
+        var open = friendlyName.LastIndexOf('(');
+        var close = friendlyName.LastIndexOf(')');
+
+        return open >= 0 && close > open
+            ? friendlyName[(open + 1)..close].Trim()
+            : string.Empty;
+    }
+
+    /// <summary>
+    /// 找出与指定渲染端配对（驱动标识相同）的录音端名称，找不到返回 null。
+    /// </summary>
+    public string? FindPairedCapture(string renderName)
+    {
+        var vendor = VendorTag(renderName);
+
+        if (vendor.Length == 0)
+        {
+            return null;
+        }
+
+        return CaptureNames.FirstOrDefault(name =>
+            string.Equals(VendorTag(name), vendor, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// 取指定用途（默认 / 通信）下的默认端点名称，取不到返回 null。
+    /// </summary>
+    public string? GetDefaultEndpointName(DataFlow flow, Role role)
+    {
+        try
+        {
+            using var device = _enumerator.GetDefaultAudioEndpoint(flow, role);
+            return device.FriendlyName;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// 取某录音端点的音量与静音状态，供通话场景排查（音量 0 或静音会让对方完全听不到）。
+    /// </summary>
+    public (float Volume, bool Muted)? GetCaptureVolume(string nameFragment)
+    {
+        try
+        {
+            using var device = Resolve(DataFlow.Capture, nameFragment);
+            var volume = device.AudioEndpointVolume;
+            return (volume.MasterVolumeLevelScalar, volume.Mute);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     public bool HasStereoMix()
     {
         return CaptureNames.Any(name =>
