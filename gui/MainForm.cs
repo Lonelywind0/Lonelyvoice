@@ -14,6 +14,9 @@ internal sealed class MainForm : Form
 {
     private const string NoMicLabel = "（不使用麦克风）";
 
+    /// <summary>自动识别的音频目录名，位于项目根目录下。启动时会扫描并载入其中的音频文件。</summary>
+    private const string AudioClipFolderName = "audio clip";
+
     private const string SettingsFileName = "vscard-gui.json";
 
     private static readonly string[] AudioExtensions =
@@ -55,10 +58,16 @@ internal sealed class MainForm : Form
         public int Latency { get; set; } = 80;
 
         public List<string> Files { get; set; } = [];
+
+        /// <summary>用户主动从列表里移除过的文件。自动扫描时跳过它们，避免「删了又自己回来」。</summary>
+        public List<string> Excluded { get; set; } = [];
     }
 
     private readonly AudioEndpointCatalog _catalog = new();
     private readonly List<FileEntry> _entries = [];
+
+    // 用户显式移除过的路径（不区分大小写）。自动扫描会跳过，手动添加则会解除屏蔽。
+    private readonly HashSet<string> _excluded = new(StringComparer.OrdinalIgnoreCase);
 
     // 会话存活期间持有的音源引用。释放由 RouterSession 统一负责（它会 Dispose 加入的音源），
     // 这里只用于运行时改音量与读取播放进度，因此停止时只需清空列表。
@@ -88,6 +97,7 @@ internal sealed class MainForm : Form
     private readonly TextBox _txtFile = new();
     private readonly Button _btnAdd = new();
     private readonly ListBox _lstFiles = new();
+    private readonly Button _btnScan = new();
     private readonly Button _btnRemove = new();
     private readonly Button _btnClear = new();
     private readonly Label _lblMusic = new();
@@ -105,6 +115,7 @@ internal sealed class MainForm : Form
 
     private readonly System.Windows.Forms.Timer _uiTimer = new() { Interval = 500 };
     private readonly NotifyIcon _tray = new();
+    private readonly ToolTip _tips = new();
 
     public MainForm()
     {
@@ -134,10 +145,31 @@ internal sealed class MainForm : Form
         ApplyPendingDeviceSelection();
         UpdateCaptureHint();
         UpdateVolumeLabels();
+
+        // 自动识别项目根目录下「audio clip」里的音频文件。
+        // 放在 LoadSettings 之后：与上次记住的列表合并，重复的会自动跳过。
+        var clipFolder = FindAudioClipFolder();
+        _tips.SetToolTip(
+            _btnScan,
+            clipFolder is null
+                ? $"未找到「{AudioClipFolderName}」文件夹"
+                : $"扫描 {clipFolder}（含子目录）");
+
+        if (clipFolder is not null)
+        {
+            ScanAudioClipFolder(announce: false);
+        }
+
         UpdateStatus();
     }
 
     // ------------------------------------------------------------------ 界面
+
+    /// <summary>当前播放列表中的文件数（供 <c>--smoke</c> 自检报告使用）。</summary>
+    internal int FileCount => _entries.Count;
+
+    /// <summary>已识别到的自动音频目录；未找到时为 <c>null</c>（供自检报告使用）。</summary>
+    internal static string? DetectedAudioClipFolder => FindAudioClipFolder();
 
     private void BuildUi()
     {
@@ -187,7 +219,7 @@ internal sealed class MainForm : Form
         y += RowH + 14;
 
         // ---------------- 音频文件 ----------------
-        _grpFiles.Text = "音频文件（可直接把文件拖进窗口）";
+        _grpFiles.Text = "音频文件（拖入文件或文件夹，或点「扫描音频目录」）";
         _grpFiles.SetBounds(Pad, y, inner, GbH);
         Controls.Add(_grpFiles);
 
@@ -207,10 +239,13 @@ internal sealed class MainForm : Form
         _lstFiles.IntegralHeight = false;
         _grpFiles.Controls.Add(_lstFiles);
 
+        _btnScan.Text = "扫描音频目录";
         _btnRemove.Text = "移除选中";
         _btnClear.Text = "全部清空";
+        _btnScan.SetBounds(12, 138, SmallBtnW, RowH + 2);
         _btnClear.SetBounds(12 + gbInner - SmallBtnW, 138, SmallBtnW, RowH + 2);
         _btnRemove.SetBounds(12 + gbInner - SmallBtnW * 2 - 8, 138, SmallBtnW, RowH + 2);
+        _grpFiles.Controls.Add(_btnScan);
         _grpFiles.Controls.Add(_btnRemove);
         _grpFiles.Controls.Add(_btnClear);
 
@@ -314,10 +349,13 @@ internal sealed class MainForm : Form
         _cmbTarget.SelectedIndexChanged += (_, _) => UpdateCaptureHint();
 
         _btnAdd.Click += (_, _) => AddFromDialog();
+        _btnScan.Click += (_, _) => ScanAudioClipFolder(announce: true);
         _btnRemove.Click += (_, _) => RemoveSelected();
         _btnClear.Click += (_, _) =>
         {
+            // 清空是「重来一次」：连移除屏蔽一起忘掉，下次扫描会把音频目录重新载入。
             _entries.Clear();
+            _excluded.Clear();
             RefreshFileList();
         };
 
@@ -398,14 +436,25 @@ internal sealed class MainForm : Form
         }
     }
 
-    private void AddFiles(IEnumerable<string> paths)
+    /// <summary>
+    /// 把路径（文件、文件夹、或多个用分号分隔的路径）加入播放列表。
+    /// </summary>
+    /// <param name="explicitAdd">
+    /// <c>true</c> = 用户主动添加：解除该文件之前的移除屏蔽，路径无效时明确提示；
+    /// <c>false</c> = 目录扫描：跳过被移除过的文件，路径无效时静默忽略。
+    /// </param>
+    /// <returns>实际新增的数量。</returns>
+    private int AddFiles(IEnumerable<string> paths, bool explicitAdd = true)
     {
         var added = 0;
         var failed = new List<string>();
 
-        foreach (var raw in paths)
+        // 用队列而不是递归：目录可能展开出很多文件，也避免深目录递归过深。
+        var queue = new Queue<string>(paths);
+
+        while (queue.Count > 0)
         {
-            var path = raw.Trim().Trim('"');
+            var path = queue.Dequeue().Trim().Trim('"');
 
             if (path.Length == 0)
             {
@@ -415,17 +464,46 @@ internal sealed class MainForm : Form
             // 支持一次粘贴多个用分号 / 竖线分隔的路径。
             if (path.Contains(';') || path.Contains('|'))
             {
-                AddFiles(path.Split([';', '|'], StringSplitOptions.RemoveEmptyEntries));
+                foreach (var piece in path.Split([';', '|'], StringSplitOptions.RemoveEmptyEntries))
+                {
+                    queue.Enqueue(piece);
+                }
+
+                continue;
+            }
+
+            // 目录：递归展开成音频文件。往窗口里拖一个文件夹走的就是这条路径。
+            if (Directory.Exists(path))
+            {
+                foreach (var found in EnumerateAudioFiles(path))
+                {
+                    queue.Enqueue(found);
+                }
+
                 continue;
             }
 
             if (!File.Exists(path))
             {
-                failed.Add($"{path}（文件不存在）");
+                if (explicitAdd)
+                {
+                    failed.Add($"{path}（文件不存在）");
+                }
+
                 continue;
             }
 
             var full = Path.GetFullPath(path);
+
+            if (explicitAdd)
+            {
+                // 用户主动加回来，解除之前的移除屏蔽。
+                _excluded.Remove(full);
+            }
+            else if (_excluded.Contains(full))
+            {
+                continue;
+            }
 
             if (_entries.Any(e => string.Equals(e.Path, full, StringComparison.OrdinalIgnoreCase)))
             {
@@ -464,10 +542,82 @@ internal sealed class MainForm : Form
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Warning);
         }
-        else if (added == 0 && _entries.Count == 0)
+        else if (added == 0 && _entries.Count == 0 && explicitAdd)
         {
             MessageBox.Show(this, "没有添加任何文件。", "Lonelyvoice", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
+
+        return added;
+    }
+
+    /// <summary>
+    /// 项目根目录下的自动识别目录（<c>audio clip</c>）。找不到时返回 <c>null</c>。
+    /// 可执行文件位于 <c>gui/bin/&lt;配置&gt;/net8.0-windows</c>，因此逐级上溯查找。
+    /// </summary>
+    private static string? FindAudioClipFolder()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+
+        for (var depth = 0; depth < 6 && dir is not null; depth++, dir = dir.Parent)
+        {
+            var candidate = Path.Combine(dir.FullName, AudioClipFolderName);
+
+            if (Directory.Exists(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>列出目录（含子目录）中的音频文件，按路径排序以保证每次顺序一致。</summary>
+    private static IEnumerable<string> EnumerateAudioFiles(string folder)
+    {
+        try
+        {
+            return Directory
+                .EnumerateFiles(folder, "*", SearchOption.AllDirectories)
+                .Where(path => AudioExtensions.Contains(
+                    Path.GetExtension(path), StringComparer.OrdinalIgnoreCase))
+                .OrderBy(path => path, StringComparer.OrdinalIgnoreCase)
+                .ToArray();
+        }
+        catch
+        {
+            // 目录被删除或没有访问权限时当成空目录，不影响手动添加。
+            return [];
+        }
+    }
+
+    /// <summary>扫描「audio clip」目录，把其中的音频文件加入列表。启动时会自动跑一次。</summary>
+    private int ScanAudioClipFolder(bool announce)
+    {
+        var folder = FindAudioClipFolder();
+
+        if (folder is null)
+        {
+            if (announce)
+            {
+                Warn($"没有找到「{AudioClipFolderName}」文件夹。\r\n\r\n请把它建在项目根目录下（与 Lonelyvoice.sln 同级），再点一次「扫描音频目录」。");
+            }
+
+            return 0;
+        }
+
+        var found = EnumerateAudioFiles(folder).ToList();
+        var added = found.Count == 0 ? 0 : AddFiles(found, explicitAdd: false);
+
+        if (announce)
+        {
+            var text = found.Count == 0
+                ? $"「{AudioClipFolderName}」里没有找到音频文件。\r\n\r\n目录：{folder}"
+                : $"扫描完成：新增 {added} 个，列表共 {_entries.Count} 个。\r\n\r\n目录：{folder}";
+
+            MessageBox.Show(this, text, "Lonelyvoice", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+
+        return added;
     }
 
     private void RemoveSelected()
@@ -478,6 +628,9 @@ internal sealed class MainForm : Form
         {
             return;
         }
+
+        // 记下用户主动移除的路径，自动扫描时不再自动加回来。
+        _excluded.Add(_entries[index].Path);
 
         _entries.RemoveAt(index);
         RefreshFileList();
@@ -1070,6 +1223,13 @@ internal sealed class MainForm : Form
             _pendingMic = settings.Mic;
             _pendingUseMic = settings.UseMicrophone;
 
+            _excluded.Clear();
+
+            foreach (var path in settings.Excluded ?? [])
+            {
+                _excluded.Add(path);
+            }
+
             foreach (var path in settings.Files ?? [])
             {
                 if (File.Exists(path) &&
@@ -1113,6 +1273,7 @@ internal sealed class MainForm : Form
                 MicVolume = _tbMicVol.Value,
                 Latency = _tbLatency.Value,
                 Files = _entries.Select(e => e.Path).ToList(),
+                Excluded = _excluded.ToList(),
             };
 
             File.WriteAllText(

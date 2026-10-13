@@ -139,6 +139,10 @@ internal static class Program
         line($"DPI        : {form.DeviceDpi}（{form.DeviceDpi * 100 / 96}%）");
         line($"客户区     : {form.ClientSize.Width} x {form.ClientSize.Height}");
         line($"字体       : {form.Font.Name} {form.Font.SizeInPoints}pt，行高 {form.Font.Height}px");
+
+        var folder = MainForm.DetectedAudioClipFolder;
+        line($"音频目录   : {folder ?? "（未找到 audio clip，自动识别不会生效）"}");
+        line($"已载入文件 : {form.FileCount} 个");
         line("");
 
         var clipped = 0;
