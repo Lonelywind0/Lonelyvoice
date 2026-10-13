@@ -11,6 +11,11 @@ internal static class Program
         // 自检必须在单实例检查之前，否则界面已开时无法运行。
         if (args.Length > 0 && args[0] is "--smoke" or "-s")
         {
+            // 与正常启动保持完全一致的渲染与 DPI 模式，
+            // 否则自检报出的布局尺寸（尤其是高 DPI 下的缩放结果）没有参考价值。
+            Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
+            Application.EnableVisualStyles();
+            Application.SetCompatibleTextRenderingDefault(false);
             return RunSmoke(args.Length > 1 ? args[1] : null);
         }
 
@@ -47,6 +52,12 @@ internal static class Program
         void Line(string text) => log.AppendLine(text);
 
         Line($"时间     : {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+
+        Line("");
+        Line("===== 界面布局自检 =====");
+        ReportLayout(Line);
+        Line("");
+        Line("===== 音频链路自检 =====");
 
         try
         {
@@ -110,6 +121,103 @@ internal static class Program
         }
 
         return Flush(log, code);
+    }
+
+    /// <summary>
+    /// 报告窗体在**当前 DPI 下**的实际尺寸，并标出文字会被截断的控件。
+    /// 高 DPI 下字体按比例放大、控件尺寸不变时中文会被切掉
+    ///（「添加文件…」只显示「添加文」就是这个原因），
+    /// 这里把「控件需要的尺寸」与「实际尺寸」逐个比对来提前发现。
+    /// </summary>
+    private static void ReportLayout(Action<string> line)
+    {
+        using var form = new MainForm();
+
+        _ = form.Handle;        // 创建句柄，触发 ApplyDpiScale() 按实际 DPI 放大布局
+        form.PerformLayout();
+
+        line($"DPI        : {form.DeviceDpi}（{form.DeviceDpi * 100 / 96}%）");
+        line($"客户区     : {form.ClientSize.Width} x {form.ClientSize.Height}");
+        line($"字体       : {form.Font.Name} {form.Font.SizeInPoints}pt，行高 {form.Font.Height}px");
+        line("");
+
+        var clipped = 0;
+
+        foreach (var control in Walk(form))
+        {
+            // 只有带文字的控件才存在「宽度不够导致截断」的问题。
+            if (control is not (Button or CheckBox or RadioButton or Label or GroupBox))
+            {
+                continue;
+            }
+
+            var text = control.Text.Replace('\r', ' ').Replace('\n', ' ').Trim();
+
+            if (text.Length == 0)
+            {
+                continue;
+            }
+
+            string need;
+            bool fits;
+
+            if (control is Label { AutoSize: false } wrapping)
+            {
+                // 自动换行的标签：在可用宽度里折行后放得下就算合格，不能按单行宽度判断。
+                var measured = TextRenderer.MeasureText(
+                    wrapping.Text,
+                    wrapping.Font,
+                    new Size(wrapping.Width, int.MaxValue),
+                    TextFormatFlags.WordBreak);
+
+                fits = measured.Height <= wrapping.Height;
+                need = $"折行 {measured.Width}x{measured.Height} / 可用高 {wrapping.Height}";
+            }
+            else
+            {
+                // 按钮 / 复选框这类控件，GetPreferredSize() 在非 AutoSize 时直接返回当前尺寸，
+                // 测不出「文字放不下」，必须自己量文字宽度再加控件自身的留白。
+                var textWidth = TextRenderer.MeasureText(control.Text, control.Font).Width;
+
+                var chrome = control switch
+                {
+                    CheckBox or RadioButton => control.Font.Height + 20,   // 勾选框本身与间距
+                    Button => 20,                                          // 按钮左右留白
+                    GroupBox => 24,                                        // 边框与标题留白
+                    _ => 0,
+                };
+
+                var needed = textWidth + chrome;
+                fits = needed <= control.Width;
+                need = $"{needed}（文字 {textWidth} + 留白 {chrome}）";
+            }
+
+            if (!fits)
+            {
+                clipped++;
+            }
+
+            var shown = text.Length > 26 ? text[..26] + "…" : text;
+            line($"[{(fits ? "OK  " : "CLIP")}] {control.GetType().Name,-9} 宽={control.Width,4} 高={control.Height,3} 需要={need,-34} {shown}");
+        }
+
+        line("");
+        line(clipped == 0
+            ? "布局       : PASS —— 没有控件因宽度不足而截断文字"
+            : $"布局       : FAIL —— {clipped} 个控件的文字会被截断");
+    }
+
+    private static IEnumerable<Control> Walk(Control root)
+    {
+        foreach (Control child in root.Controls)
+        {
+            yield return child;
+
+            foreach (var nested in Walk(child))
+            {
+                yield return nested;
+            }
+        }
     }
 
     private static int Flush(StringBuilder log, int code)

@@ -83,6 +83,23 @@ Lonelyvoice.sln
 gui\bin\Release\net8.0-windows\vscard-gui.exe --smoke
 ```
 
+自检分两段：
+
+- **界面布局自检** —— 报告当前显示器 DPI、缩放后的客户区尺寸，并逐个比对每个带文字控件的
+  「实际宽度」与「文字所需宽度」，任一控件放不下就报 `CLIP`。改完界面先跑一遍，能直接发现被截断的中文。
+- **音频链路自检** —— 验证 `AdjustableSource` 包装层能否被会话正常启停、运行时改音量是否生效。
+
+### 关于高 DPI
+
+布局坐标是 **96 DPI 基准的像素值**，而 9pt 字体会随 DPI 自动放大，两者必须一起缩放，
+否则中文会被截断（`添加文件…` 只剩 `添加文`）。
+
+WinForms 自带的 `AutoScaleMode` 在这里**不生效**（实测把 `AutoScaleMode.Dpi` +
+`AutoScaleDimensions` 设好后，144 DPI 下客户区仍停在 96 DPI 的基准值），
+因此改用 `MainForm.ApplyDpiScale()`：在句柄创建时按 `DeviceDpi / 96` **手工放大布局**，
+只缩放坐标与尺寸、**不动字体**（字体以 pt 计，已随 DPI 放大，重复放大反而溢出）。
+窗体被拖到另一块不同缩放的显示器时由 `OnDpiChanged` 按比例补一次。
+
 ## 虚拟声卡设备
 
 本项目负责**把音频推给虚拟声卡**，虚拟设备本身属于驱动层，必须由驱动提供。

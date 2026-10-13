@@ -78,6 +78,7 @@ internal sealed class MainForm : Form
     private string? _pendingMic;
     private bool _pendingUseMic = true;
     private bool _hotKeyRegistered;
+    private bool _dpiScaled;
 
     // ---- 控件 ----
     private readonly ComboBox _cmbTarget = new();
@@ -108,8 +109,17 @@ internal sealed class MainForm : Form
     public MainForm()
     {
         Text = "Lonelyvoice 虚拟声卡";
+
+        // 布局里的坐标与尺寸都是 96 DPI 基准的像素值，而 9pt 字体会随 DPI 自动放大。
+        // WinForms 自带的自动缩放在这里不可靠：实测 144 DPI 下把 AutoScaleMode 设为
+        // Dpi 并给出 AutoScaleDimensions 后，客户区仍停在 560x692（= 96 DPI 基准值），
+        // 于是文字放大 1.5 倍、控件没放大，中文按钮被截断
+        //（「添加文件…」只显示「添加文」、「静音音乐 (Ctrl+Alt+M)」只显示「静音音乐（」）。
+        // 因此关掉自动缩放，改由 ApplyDpiScale() 在句柄创建时按实际 DPI 手工放大布局。
+        AutoScaleMode = AutoScaleMode.None;
+
         Font = new Font("Microsoft YaHei UI", 9F);
-        ClientSize = new Size(540, 700);
+        ClientSize = new Size(560, 692);
         StartPosition = FormStartPosition.CenterScreen;
         FormBorderStyle = FormBorderStyle.FixedSingle;
         MaximizeBox = false;
@@ -123,6 +133,7 @@ internal sealed class MainForm : Form
         RefreshDevices();
         ApplyPendingDeviceSelection();
         UpdateCaptureHint();
+        UpdateVolumeLabels();
         UpdateStatus();
     }
 
@@ -130,121 +141,164 @@ internal sealed class MainForm : Form
 
     private void BuildUi()
     {
-        Label Caption(string text, int x, int y, int w = 500)
-            => new() { Text = text, Location = new Point(x, y), Size = new Size(w, 18), ForeColor = SystemColors.GrayText };
+        // 统一用「光标式」纵向排布，避免手写坐标彼此不匹配。
+        // 所有尺寸均为 96 DPI 基准值，实际会由 AutoScaleMode.Dpi 等比放大。
+        const int Pad = 18;         // 左右外边距
+        const int CapH = 18;        // 说明文字行高
+        const int RowH = 28;        // 输入控件行高
+        const int SliderH = 32;
+        const int GbH = 172;        // 「音频文件」分组高度
+        const int SmallBtnW = 132;  // 小组件按钮宽度：按 150% 缩放下的中文宽度留足余量
 
-        Controls.Add(Caption("目标设备（虚拟声卡的播放端）", 20, 16));
+        var inner = ClientSize.Width - Pad * 2;
+        var y = 14;
 
-        _cmbTarget.Location = new Point(20, 38);
-        _cmbTarget.Size = new Size(420, 25);
+        Label Caption(string text, int x, int top)
+            => new()
+            {
+                Text = text,
+                AutoSize = true,
+                Location = new Point(x, top),
+                ForeColor = SystemColors.GrayText,
+            };
+
+        // ---------------- 目标设备 ----------------
+        Controls.Add(Caption("目标设备（虚拟声卡的播放端）", Pad, y));
+        y += CapH + 2;
+
+        _cmbTarget.SetBounds(Pad, y, inner - SmallBtnW - 8, RowH);
         _cmbTarget.DropDownStyle = ComboBoxStyle.DropDownList;
         Controls.Add(_cmbTarget);
 
         _btnRefresh.Text = "刷新";
-        _btnRefresh.Location = new Point(450, 37);
-        _btnRefresh.Size = new Size(70, 26);
+        _btnRefresh.SetBounds(Pad + inner - SmallBtnW, y, SmallBtnW, RowH);
         Controls.Add(_btnRefresh);
 
-        Controls.Add(Caption("麦克风（想边说话边放音乐时选它，否则保持不使用）", 20, 78));
+        y += RowH + 12;
 
-        _cmbMic.Location = new Point(20, 100);
-        _cmbMic.Size = new Size(500, 25);
+        // ---------------- 麦克风 ----------------
+        Controls.Add(Caption("麦克风（想边说话边放音乐时选它，否则保持不使用）", Pad, y));
+        y += CapH + 2;
+
+        _cmbMic.SetBounds(Pad, y, inner, RowH);
         _cmbMic.DropDownStyle = ComboBoxStyle.DropDownList;
         Controls.Add(_cmbMic);
 
+        y += RowH + 14;
+
+        // ---------------- 音频文件 ----------------
         _grpFiles.Text = "音频文件（可直接把文件拖进窗口）";
-        _grpFiles.Location = new Point(20, 138);
-        _grpFiles.Size = new Size(500, 186);
+        _grpFiles.SetBounds(Pad, y, inner, GbH);
         Controls.Add(_grpFiles);
 
-        _txtFile.Location = new Point(12, 30);
-        _txtFile.Size = new Size(360, 25);
+        var gbInner = _grpFiles.Width - 24;
+
+        _txtFile.SetBounds(12, 27, gbInner - SmallBtnW - 8, RowH);
         _txtFile.PlaceholderText = "输入路径，或点右侧按钮选择";
         _grpFiles.Controls.Add(_txtFile);
 
         _btnAdd.Text = "添加文件…";
-        _btnAdd.Location = new Point(380, 29);
-        _btnAdd.Size = new Size(100, 26);
+        _btnAdd.SetBounds(12 + gbInner - SmallBtnW, 26, SmallBtnW, RowH + 2);
         _grpFiles.Controls.Add(_btnAdd);
 
-        _lstFiles.Location = new Point(12, 62);
-        _lstFiles.Size = new Size(470, 82);
+        _lstFiles.SetBounds(12, 60, gbInner, 72);
         _lstFiles.SelectionMode = SelectionMode.One;
         _lstFiles.AllowDrop = true;
         _lstFiles.IntegralHeight = false;
         _grpFiles.Controls.Add(_lstFiles);
 
         _btnRemove.Text = "移除选中";
-        _btnRemove.Location = new Point(290, 150);
-        _btnRemove.Size = new Size(88, 26);
-        _grpFiles.Controls.Add(_btnRemove);
-
         _btnClear.Text = "全部清空";
-        _btnClear.Location = new Point(386, 150);
-        _btnClear.Size = new Size(96, 26);
+        _btnClear.SetBounds(12 + gbInner - SmallBtnW, 138, SmallBtnW, RowH + 2);
+        _btnRemove.SetBounds(12 + gbInner - SmallBtnW * 2 - 8, 138, SmallBtnW, RowH + 2);
+        _grpFiles.Controls.Add(_btnRemove);
         _grpFiles.Controls.Add(_btnClear);
 
-        _lblMusic.Location = new Point(20, 334);
-        _lblMusic.Size = new Size(300, 18);
+        y += GbH + 16;
+
+        // ---------------- 音量 ----------------
+        // 「静音音乐」放在音乐音量这一行的右侧、与标题同一行。
+        // 原来它与滑块并排，宽度不够时复选框会被窗口边缘切掉。
+        const int MuteW = 250;
+
+        _lblMusic.AutoSize = true;
+        _lblMusic.Location = new Point(Pad, y + 2);
         Controls.Add(_lblMusic);
 
-        _tbMusic.Location = new Point(20, 354);
-        _tbMusic.Size = new Size(370, 32);
+        _chkMuteMusic.AutoSize = false;
+        _chkMuteMusic.Text = "静音音乐 (Ctrl+Alt+M)";
+        _chkMuteMusic.SetBounds(Pad + inner - MuteW, y, MuteW, CapH + 4);
+        Controls.Add(_chkMuteMusic);
+
+        y += CapH + 8;
+
+        _tbMusic.SetBounds(Pad, y, inner, SliderH);
         _tbMusic.Minimum = 0;
         _tbMusic.Maximum = 100;
         _tbMusic.TickStyle = TickStyle.None;
         Controls.Add(_tbMusic);
 
-        _chkMuteMusic.Text = "静音音乐 (Ctrl+Alt+M)";
-        _chkMuteMusic.Location = new Point(398, 358);
-        _chkMuteMusic.Size = new Size(140, 24);
-        Controls.Add(_chkMuteMusic);
+        y += SliderH + 12;
 
-        _lblMicVol.Location = new Point(20, 392);
-        _lblMicVol.Size = new Size(300, 18);
+        _lblMicVol.AutoSize = true;
+        _lblMicVol.Location = new Point(Pad, y);
         Controls.Add(_lblMicVol);
 
-        _tbMicVol.Location = new Point(20, 412);
-        _tbMicVol.Size = new Size(500, 32);
+        y += CapH + 4;
+
+        _tbMicVol.SetBounds(Pad, y, inner, SliderH);
         _tbMicVol.Minimum = 0;
         _tbMicVol.Maximum = 100;
         _tbMicVol.TickStyle = TickStyle.None;
         Controls.Add(_tbMicVol);
 
-        _lblLatency.Location = new Point(20, 450);
-        _lblLatency.Size = new Size(360, 18);
+        y += SliderH + 12;
+
+        _lblLatency.AutoSize = true;
+        _lblLatency.Location = new Point(Pad, y);
         Controls.Add(_lblLatency);
 
-        _tbLatency.Location = new Point(20, 470);
-        _tbLatency.Size = new Size(500, 32);
+        y += CapH + 4;
+
+        _tbLatency.SetBounds(Pad, y, inner, SliderH);
         _tbLatency.Minimum = 20;
         _tbLatency.Maximum = 300;
         _tbLatency.TickStyle = TickStyle.None;
         Controls.Add(_tbLatency);
 
+        y += SliderH + 18;
+
+        // ---------------- 控制按钮 ----------------
+        var btnW = (inner - 16) / 2;
+
         _btnStart.Text = "开始路由";
-        _btnStart.Location = new Point(20, 520);
-        _btnStart.Size = new Size(240, 42);
+        _btnStart.SetBounds(Pad, y, btnW, 38);
         Controls.Add(_btnStart);
 
         _btnStop.Text = "停止";
-        _btnStop.Location = new Point(280, 520);
-        _btnStop.Size = new Size(240, 42);
+        _btnStop.SetBounds(Pad + btnW + 16, y, btnW, 38);
         _btnStop.Enabled = false;
         Controls.Add(_btnStop);
 
-        _lblStatus.Location = new Point(20, 578);
-        _lblStatus.Size = new Size(500, 20);
+        y += 38 + 16;
+
+        // ---------------- 状态与提示 ----------------
+        _lblStatus.AutoSize = false;
+        _lblStatus.AutoEllipsis = true;
+        _lblStatus.SetBounds(Pad, y, inner, 20);
         Controls.Add(_lblStatus);
 
-        _lblHint.Location = new Point(20, 604);
-        _lblHint.Size = new Size(420, 62);
+        y += 24;
+
+        const int CopyW = 92;
+
+        _lblHint.AutoSize = false;
+        _lblHint.SetBounds(Pad, y, inner - CopyW - 10, 66);
         _lblHint.ForeColor = SystemColors.GrayText;
         Controls.Add(_lblHint);
 
         _btnCopy.Text = "复制";
-        _btnCopy.Location = new Point(450, 608);
-        _btnCopy.Size = new Size(70, 28);
+        _btnCopy.SetBounds(Pad + inner - CopyW, y + 2, CopyW, RowH + 2);
         _btnCopy.Enabled = false;
         Controls.Add(_btnCopy);
     }
@@ -850,9 +904,63 @@ internal sealed class MainForm : Form
 
     // -------------------------------------------------------- 生命周期
 
+    /// <summary>
+    /// 按当前显示器的 DPI 等比放大整个布局。
+    /// 布局坐标是 96 DPI 基准的像素值，而 9pt 字体已随 DPI 自动放大，
+    /// 两者不匹配时中文会被截断（「添加文件…」只剩「添加文」）。
+    /// 这里<b>只放大布局、不动字体</b>——字体以 pt 为单位，重复放大反而会溢出。
+    /// </summary>
+    private void ApplyDpiScale()
+    {
+        if (_dpiScaled)
+        {
+            return;
+        }
+
+        _dpiScaled = true;
+
+        var scale = DeviceDpi / 96f;
+
+        if (Math.Abs(scale - 1f) < 0.01f)
+        {
+            return;
+        }
+
+        SuspendLayout();
+        ScaleDescendants(this, scale);
+        ClientSize = new Size(
+            (int)Math.Round(ClientSize.Width * scale),
+            (int)Math.Round(ClientSize.Height * scale));
+        ResumeLayout(true);
+    }
+
+    private static void ScaleDescendants(Control parent, float scale)
+    {
+        foreach (Control child in parent.Controls)
+        {
+            child.Location = new Point(
+                (int)Math.Round(child.Location.X * scale),
+                (int)Math.Round(child.Location.Y * scale));
+
+            // 自动按文字定尺寸的控件（说明标签）不能强行改尺寸，否则会被拉伸变形。
+            var sizeFollowsText = child.AutoSize && child is Label or CheckBox or RadioButton or LinkLabel;
+
+            if (!sizeFollowsText)
+            {
+                child.Size = new Size(
+                    (int)Math.Round(child.Width * scale),
+                    (int)Math.Round(child.Height * scale));
+            }
+
+            ScaleDescendants(child, scale);
+        }
+    }
+
     protected override void OnHandleCreated(EventArgs e)
     {
         base.OnHandleCreated(e);
+
+        ApplyDpiScale();
 
         // 句柄可能被重建，重复注册会失败并误报「被占用」。
         if (_hotKeyRegistered)
@@ -869,6 +977,31 @@ internal sealed class MainForm : Form
             // 热键被别的程序占用时不阻断使用，只是没有快捷键。
             _chkMuteMusic.Text = "静音音乐（快捷键被占用）";
         }
+    }
+
+    protected override void OnDpiChanged(DpiChangedEventArgs e)
+    {
+        base.OnDpiChanged(e);
+
+        // 手工缩放后 WinForms 不会自己重算，窗体被拖到另一个缩放的显示器时按比例补一次。
+        if (e.DeviceDpiOld <= 0)
+        {
+            return;
+        }
+
+        var ratio = e.DeviceDpiNew / (float)e.DeviceDpiOld;
+
+        if (Math.Abs(ratio - 1f) < 0.01f)
+        {
+            return;
+        }
+
+        SuspendLayout();
+        ScaleDescendants(this, ratio);
+        ClientSize = new Size(
+            (int)Math.Round(ClientSize.Width * ratio),
+            (int)Math.Round(ClientSize.Height * ratio));
+        ResumeLayout(true);
     }
 
     protected override void WndProc(ref Message m)
