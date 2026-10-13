@@ -1,25 +1,34 @@
 @echo off
 setlocal
-set "ROOT=%~dp0"
-set "DOTNET_ROOT=%ROOT%.dotnet"
-set "PATH=%DOTNET_ROOT%;%PATH%"
-set "DOTNET_CLI_HOME=%ROOT%.dotnet-home"
+pushd "%~dp0"
+
+set "DOTNET_ROOT=%~dp0.dotnet"
+set "DOTNET_CLI_HOME=%~dp0.dotnet-home"
 set "DOTNET_CLI_TELEMETRY_OPTOUT=1"
 set "DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1"
 set "DOTNET_NOLOGO=1"
-set "NUGET_PACKAGES=%ROOT%.nuget\packages"
+set "NUGET_PACKAGES=%~dp0.nuget\packages"
+set "EXE=%~dp0gui\bin\Release\net8.0-windows\vscard-gui.exe"
 
-set "EXE=%ROOT%gui\bin\Release\net8.0-windows\vscard-gui.exe"
+if not exist "%DOTNET_ROOT%\dotnet.exe" (
+  echo [ERROR] Local .NET SDK not found: %DOTNET_ROOT%\dotnet.exe
+  echo         See README section "Self-contained environment" for how to install it.
+  popd
+  exit /b 1
+)
 
 if not exist "%EXE%" (
-  echo 首次运行，正在编译界面，请稍候...
-  "%DOTNET_ROOT%\dotnet.exe" build "%ROOT%gui\VirtualSoundCard.Gui.csproj" -c Release -v minimal
+  echo First run: building the GUI, please wait...
+  "%DOTNET_ROOT%\dotnet.exe" build "%~dp0gui\VirtualSoundCard.Gui.csproj" -c Release -v minimal
   if errorlevel 1 (
     echo.
-    echo 编译失败，请把上面的错误信息发出来。
+    echo [ERROR] Build failed. Please copy the error messages above.
+    popd
     pause
     exit /b 1
   )
 )
 
 start "" "%EXE%"
+popd
+exit /b 0

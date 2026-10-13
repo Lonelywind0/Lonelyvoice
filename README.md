@@ -49,6 +49,13 @@ gui.cmd
 
 `build.cmd` / `vscard.cmd` / `gui.cmd` 会自动设置好 `DOTNET_ROOT`、`NUGET_PACKAGES` 等环境变量，直接用它们即可。
 
+> **改脚本前必读**：这三个 `.cmd` 必须是 **CRLF 换行 + 纯 ASCII**。
+> `cmd.exe` 的批处理解析器遇到 LF-only 文件会把行边界读歪，症状是报出一堆莫名其妙的
+> `'XXX' 不是内部或外部命令`、变量名被从中间劈开；若再混入 UTF-8 中文，会被按 GBK
+> 误读成乱码并可能吞掉下一行的开头。仓库根部的 `.gitattributes` 已锁定 `*.cmd` 为 CRLF，
+> 但用编辑器另存时仍需注意不要存成 UTF-8 并选 LF。提示信息一律用英文写。
+> 换行符自检：`cmd /c "find /v "" build.cmd >nul"`（或直接用支持 CRLF 的编辑器查看）。
+
 ## 工程结构
 
 ```

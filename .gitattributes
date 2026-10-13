@@ -1,0 +1,15 @@
+# 批处理文件必须是 CRLF：cmd.exe 解析 LF-only 的 .cmd/.bat 会把行边界读歪，
+# 表现为变量名被劈开、"echo." 变成 "o." 之类的乱码错误。
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# 脚本类文件统一 LF。
+*.sh   text eol=lf
+
+# 二进制文件不做换行转换。
+*.zip  binary
+*.wav  binary
+*.mp3  binary
+*.mp4  binary
+*.png  binary
+*.ico  binary
