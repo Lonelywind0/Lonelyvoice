@@ -7,6 +7,34 @@
                                 (播放设备)                   (录音设备)         选它作为麦克风输入
 ```
 
+## 两种用法
+
+| 入口 | 适合 | 说明 |
+|---|---|---|
+| **图形界面**（推荐） | 日常使用 | `gui.cmd` 双击即用：下拉选设备、拖入文件、推子调音量、托盘常驻、`Ctrl+Alt+M` 一键静音音乐 |
+| 命令行 | 脚本 / 排查 | `vscard.cmd ...`，另有 `probe`、`doctor`、`mic` 等自检命令 |
+
+两边用的是**同一套音频核心**——`gui/` 工程通过源码链接复用 `src/` 下的实现，不存在两套代码不一致的问题。
+
+### 图形界面
+
+```cmd
+gui.cmd
+```
+
+首次运行会自动编译（十几秒），之后直接启动。
+
+- **目标设备**：自动优先选中真正的虚拟线缆（本机为 VB-CABLE），并避开打不开的 `CABLE In 16 Ch`
+- **麦克风**：想边说话边放音乐就选它；只想放音乐则保持「不使用麦克风」
+- **音频文件**：可直接把文件拖进窗口，支持多首同时叠加
+- **音乐 / 麦克风音量**：两个独立推子，**拖动实时生效**
+- **输出延迟**：20–300 ms，开始路由后生效
+- **托盘常驻**：点右上角关闭只是收进托盘，路由继续运行；真正退出走托盘右键菜单
+- **`Ctrl+Alt+M`**：一键静音 / 恢复音乐，只留你的麦克风
+- 设置（设备、音量、延迟、最近文件）自动记忆，下次打开原样恢复
+
+界面右下角会直接告诉你**通话软件里该把麦克风选成哪个设备**，旁边可一键复制。
+
 ## 环境自包含
 
 本项目的**所有依赖都装在这个文件夹里**，不写 `%USERPROFILE%`，不改系统 PATH：
@@ -16,9 +44,37 @@
 | `.dotnet/` | .NET 8 SDK 本体 |
 | `.nuget/packages/` | NuGet 包缓存（由 `nuget.config` 的 `globalPackagesFolder` 指定） |
 | `.dotnet-home/` | .NET CLI 运行期数据（由 `DOTNET_CLI_HOME` 指定） |
-| `src/bin`、`src/obj` | 编译产物 |
+| `src/bin`、`src/obj` | 命令行版编译产物 |
+| `gui/bin`、`gui/obj` | 界面版编译产物 |
 
-`build.cmd` / `vscard.cmd` 会自动设置好 `DOTNET_ROOT`、`NUGET_PACKAGES` 等环境变量，直接用它们即可。
+`build.cmd` / `vscard.cmd` / `gui.cmd` 会自动设置好 `DOTNET_ROOT`、`NUGET_PACKAGES` 等环境变量，直接用它们即可。
+
+## 工程结构
+
+```
+Lonelyvoice.sln
+├─ src/          命令行工程（vscard.exe）
+│    RouterSession.cs            路由会话：多路音源混成一路后渲染到虚拟端点
+│    CaptureSource.cs            录音端点音源（真实麦克风）
+│    AudioEndpointCatalog.cs     端点枚举、虚拟线缆识别与配对
+│    ChannelMapSampleProvider.cs 任意声道数互转（5.1 / 7.1 降混）
+│    LevelMeter.cs               电平统计，供 probe 判定链路是否连通
+│    SourceFactory.cs            音源构造
+│    Cli.cs / Program.cs         命令行入口
+└─ gui/          界面工程（vscard-gui.exe）
+     MainForm.cs                 主窗口 + 托盘 + 全局热键
+     AdjustableSource.cs         可运行时调音量的音源包装器
+     Program.cs                  入口 + 单实例 + --smoke 自检
+```
+
+`gui/` 不复制任何音频代码，而是用 `<Compile Include="..\src\*.cs" />` 直接引用 `src/` 的源码，
+因此修 bug 只需改一处。排除 `src/Program.cs` 是为了避免与界面的入口冲突。
+
+界面层自检（不需要界面就能跑，结果写入 `gui/bin/Release/net8.0-windows/smoke.log`）：
+
+```cmd
+gui\bin\Release\net8.0-windows\vscard-gui.exe --smoke
+```
 
 ## 虚拟声卡设备
 
@@ -152,6 +208,8 @@ vscard.cmd route -l -v 0.6               :: 把系统正在播放的声音送出
 ```cmd
 build.cmd
 ```
+
+一次编译命令行与界面两个工程。
 
 ## 更新 SDK
 

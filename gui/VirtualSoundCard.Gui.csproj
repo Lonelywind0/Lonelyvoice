@@ -1,0 +1,28 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <AssemblyName>vscard-gui</AssemblyName>
+    <RootNamespace>VirtualSoundCard.Gui</RootNamespace>
+  </PropertyGroup>
+
+  <!--
+    直接复用 src/ 下已验证的音频核心，而不是复制一份：
+    RouterSession / CaptureSource / AudioEndpointCatalog / ChannelMapSampleProvider
+    都经过了实测（多声道降混、端点配对、CABLE 16Ch 冲突、麦克风混音）。
+    排除 Program.cs，因为它含 CLI 的顶层语句入口，会与界面的 Main 冲突。
+  -->
+  <ItemGroup>
+    <Compile Include="..\src\*.cs" Exclude="..\src\Program.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="NAudio" Version="2.2.1" />
+  </ItemGroup>
+
+</Project>

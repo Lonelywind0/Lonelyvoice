@@ -54,6 +54,9 @@ public sealed class FileSource : ISampleProvider, IDisposable
 
     public TimeSpan TotalTime => _reader.TotalTime;
 
+    /// <summary>当前播放位置，供界面显示进度。</summary>
+    public TimeSpan CurrentTime => _reader.CurrentTime;
+
     public WaveFormat WaveFormat => _reader.WaveFormat;
 
     public int Read(float[] buffer, int offset, int count) => _reader.Read(buffer, offset, count);

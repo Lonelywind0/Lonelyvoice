@@ -9,4 +9,4 @@ set "DOTNET_SKIP_FIRST_TIME_EXPERIENCE=1"
 set "DOTNET_NOLOGO=1"
 set "NUGET_PACKAGES=%ROOT%.nuget\packages"
 
-"%DOTNET_ROOT%\dotnet.exe" build "%ROOT%src\VirtualSoundCard.csproj" -c Release %*
+"%DOTNET_ROOT%\dotnet.exe" build "%ROOT%Lonelyvoice.sln" -c Release %*

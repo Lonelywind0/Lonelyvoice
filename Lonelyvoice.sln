@@ -1,0 +1,28 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "VirtualSoundCard", "src\VirtualSoundCard.csproj", "{1A619E10-18B0-43A3-99FD-47A34F4C80EB}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "VirtualSoundCard.Gui", "gui\VirtualSoundCard.Gui.csproj", "{3E1A1BCD-88C2-4859-90C1-18ADAFED969C}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{1A619E10-18B0-43A3-99FD-47A34F4C80EB}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{1A619E10-18B0-43A3-99FD-47A34F4C80EB}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{1A619E10-18B0-43A3-99FD-47A34F4C80EB}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{1A619E10-18B0-43A3-99FD-47A34F4C80EB}.Release|Any CPU.Build.0 = Release|Any CPU
+		{3E1A1BCD-88C2-4859-90C1-18ADAFED969C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3E1A1BCD-88C2-4859-90C1-18ADAFED969C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3E1A1BCD-88C2-4859-90C1-18ADAFED969C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3E1A1BCD-88C2-4859-90C1-18ADAFED969C}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+EndGlobal
