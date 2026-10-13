@@ -86,10 +86,36 @@ public sealed class ChannelMapSampleProvider : ISampleProvider
                 buffer[offset + f] = sum / _inputChannels;
             }
         }
+        else if (_outputChannels == 2)
+        {
+            // 多声道 → 立体声：前两个声道（FL / FR）作为主体并保持原始电平，
+            // 其余声道（中置 / 环绕 / LFE）取均值后以半权重混入两侧。
+            //
+            // 早前把「前两声道 + 其它声道」整体按输入声道数取平均，会让主声道
+            // 只剩 1/N（5.1 时即 1/3），多声道音乐播放时音量明显偏低，这里修正。
+            var extraChannels = _inputChannels - 2;
+
+            for (var f = 0; f < framesRead; f++)
+            {
+                var source = f * _inputChannels;
+                var destination = offset + f * 2;
+
+                var extra = 0f;
+
+                for (var c = 2; c < _inputChannels; c++)
+                {
+                    extra += _input[source + c];
+                }
+
+                extra = extra / extraChannels * 0.5f;
+
+                buffer[destination] = Clamp(_input[source] + extra);
+                buffer[destination + 1] = Clamp(_input[source + 1] + extra);
+            }
+        }
         else
         {
-            // 多声道降混：按索引取模归并到输出声道后取平均。
-            // 取平均而不是求和，是为了让总增益不随声道数增长，杜绝削波。
+            // 其它目标声道数：按索引取模归并后取平均。
             var groupSize = (float)_inputChannels / _outputChannels;
 
             for (var f = 0; f < framesRead; f++)
@@ -109,11 +135,21 @@ public sealed class ChannelMapSampleProvider : ISampleProvider
 
                 for (var c = 0; c < _outputChannels; c++)
                 {
-                    buffer[destination + c] /= groupSize;
+                    buffer[destination + c] = Clamp(buffer[destination + c] / groupSize);
                 }
             }
         }
 
         return framesRead * _outputChannels;
+    }
+
+    private static float Clamp(float value)
+    {
+        if (value > 1f)
+        {
+            return 1f;
+        }
+
+        return value < -1f ? -1f : value;
     }
 }
